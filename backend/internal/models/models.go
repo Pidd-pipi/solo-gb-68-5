@@ -114,6 +114,31 @@ const (
 	ExecutionStatusInProgress ExecutionStatus = "in_progress"
 )
 
+type DecisionStatus string
+
+const (
+	DecisionStatusPending   DecisionStatus = "pending"
+	DecisionStatusConfirmed DecisionStatus = "confirmed"
+)
+
+// IrrigationDecision 一次智能灌溉决策的结果快照，确认执行时必须引用
+type IrrigationDecision struct {
+	ID                uint           `json:"id" gorm:"primaryKey"`
+	ZoneID            uint           `json:"zone_id" gorm:"not null"`
+	TargetHumidity    float64        `json:"target_humidity" gorm:"type:decimal(5,2);not null"`
+	MaxDuration       int            `json:"max_duration" gorm:"not null"`
+	SuggestedDuration int            `json:"suggested_duration" gorm:"not null"`
+	ShouldIrrigate    bool           `json:"should_irrigate" gorm:"not null"`
+	Reason            string         `json:"reason" gorm:"type:text"`
+	CurrentHumidity   *float64       `json:"current_humidity" gorm:"type:decimal(5,2)"`
+	RecentRainfall    float64        `json:"recent_rainfall" gorm:"type:decimal(10,2)"`
+	ForecastRainfall  float64        `json:"forecast_rainfall" gorm:"type:decimal(10,2)"`
+	Status            DecisionStatus `json:"status" gorm:"size:20;not null;default:'pending'"`
+	ConfirmedLogID    *uint          `json:"confirmed_log_id"`
+	ExpiresAt         time.Time      `json:"expires_at" gorm:"type:timestamptz;not null"`
+	CreatedAt         time.Time      `json:"created_at"`
+}
+
 type IrrigationLog struct {
 	ID          uint            `json:"id" gorm:"primaryKey"`
 	ScheduleID  *uint           `json:"schedule_id"`
@@ -121,6 +146,7 @@ type IrrigationLog struct {
 	TriggerType TriggerType      `json:"trigger_type" gorm:"type:trigger_type;not null"`
 	StartTime   time.Time        `json:"start_time" gorm:"not null"`
 	EndTime     *time.Time     `json:"end_time"`
+	PlannedDuration *int       `json:"planned_duration"`
 	Duration    *int           `json:"duration"`
 	WaterUsage  *float64        `json:"water_usage" gorm:"type:decimal(10,2)"`
 	Status      ExecutionStatus  `json:"status" gorm:"type:execution_status;not null"`

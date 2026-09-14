@@ -6,8 +6,11 @@ CREATE TABLE IF NOT EXISTS irrigation_zones (
     name VARCHAR(100) NOT NULL,
     description TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS idx_irrigation_zones_deleted_at ON irrigation_zones(deleted_at);
 
 -- 设备类型枚举
 CREATE TYPE device_type AS ENUM ('valve', 'pump', 'soil_sensor', 'rain_sensor', 'temp_sensor');
@@ -24,8 +27,11 @@ CREATE TABLE IF NOT EXISTS devices (
     last_heartbeat TIMESTAMP,
     config JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS idx_devices_deleted_at ON devices(deleted_at);
 
 -- 传感器数据表（时序表）
 CREATE TABLE IF NOT EXISTS sensor_data (
@@ -62,8 +68,11 @@ CREATE TABLE IF NOT EXISTS irrigation_schedules (
     humidity_threshold DECIMAL(5, 2),
     rain_sensor_id INTEGER REFERENCES devices(id),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS idx_irrigation_schedules_deleted_at ON irrigation_schedules(deleted_at);
 
 -- 触发方式枚举
 CREATE TYPE trigger_type AS ENUM ('manual', 'timed', 'conditional');
@@ -77,6 +86,7 @@ CREATE TABLE IF NOT EXISTS irrigation_logs (
     trigger_type trigger_type NOT NULL,
     start_time TIMESTAMP NOT NULL,
     end_time TIMESTAMP,
+    planned_duration INTEGER,
     duration INTEGER,
     water_usage DECIMAL(10, 2),
     status execution_status NOT NULL,
@@ -84,9 +94,39 @@ CREATE TABLE IF NOT EXISTS irrigation_logs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 兼容已有部署：补充计划时长列（幂等）
+ALTER TABLE irrigation_logs ADD COLUMN IF NOT EXISTS planned_duration INTEGER;
+
 -- 创建索引
 CREATE INDEX IF NOT EXISTS idx_irrigation_logs_zone_time ON irrigation_logs(zone_id, start_time);
 CREATE INDEX IF NOT EXISTS idx_irrigation_logs_time ON irrigation_logs(start_time);
+
+-- 同一区域同一时间只允许一条执行中的灌溉记录（重复确认的数据库兜底）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_irrigation_logs_zone_in_progress
+    ON irrigation_logs(zone_id) WHERE status = 'in_progress';
+
+-- 智能灌溉决策结果表：确认执行必须引用有效（未过期、未使用、区域一致）的决策
+CREATE TABLE IF NOT EXISTS irrigation_decisions (
+    id BIGSERIAL PRIMARY KEY,
+    zone_id INTEGER NOT NULL REFERENCES irrigation_zones(id),
+    target_humidity DECIMAL(5, 2) NOT NULL,
+    max_duration INTEGER NOT NULL,
+    suggested_duration INTEGER NOT NULL,
+    should_irrigate BOOLEAN NOT NULL,
+    reason TEXT,
+    current_humidity DECIMAL(5, 2),
+    recent_rainfall DECIMAL(10, 2),
+    forecast_rainfall DECIMAL(10, 2),
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    confirmed_log_id BIGINT REFERENCES irrigation_logs(id),
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_irrigation_decisions_zone ON irrigation_decisions(zone_id);
+
+-- 兼容已有部署：过期时间必须带时区，否则本地时区下过期判断会整体偏移（幂等）
+ALTER TABLE irrigation_decisions ALTER COLUMN expires_at TYPE TIMESTAMPTZ;
 
 -- 告警类型枚举
 CREATE TYPE alert_type AS ENUM ('device_offline', 'sensor_abnormal', 'irrigation_failed');
@@ -126,6 +166,11 @@ CREATE TABLE IF NOT EXISTS system_configs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 兼容已有部署：为软删除表补充 deleted_at 列（幂等）
+ALTER TABLE irrigation_zones ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
+ALTER TABLE irrigation_schedules ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
 
 -- 插入默认管理员用户 (密码: admin123)
 INSERT INTO users (username, password_hash, email) 
